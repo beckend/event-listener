@@ -6,9 +6,10 @@
 mod example {
     #![allow(dead_code)]
 
+    use std::collections::VecDeque;
     use std::ops::{Deref, DerefMut};
-    use std::sync::{mpsc, Arc};
-    use std::thread;
+    use std::sync::Arc;
+    use std::thread::{available_parallelism, scope};
     use std::time::{Duration, Instant};
 
     use event_listener::{listener, Event, Listener};
@@ -124,35 +125,26 @@ mod example {
     }
 
     pub(super) fn entry() {
-        const N: usize = 10;
+        let count_max = 10000_usize;
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let thread_count = available_parallelism().unwrap().get() * 4;
+        let thread_loop = count_max / thread_count;
+        let mut count_actual = 0_usize;
 
-        // A shared counter.
-        let counter = Arc::new(Mutex::new(0));
+        scope(|s| {
+            for _ in 0..thread_count {
+                let queue = queue.clone();
+                count_actual += thread_loop;
 
-        // A channel that signals when all threads are done.
-        let (tx, rx) = mpsc::channel();
+                s.spawn(move || {
+                    for i in 0..thread_loop {
+                        queue.lock().push_back(i);
+                    }
+                });
+            }
+        });
 
-        // Spawn a bunch of threads incrementing the counter.
-        for _ in 0..N {
-            let counter = counter.clone();
-            let tx = tx.clone();
-
-            thread::spawn(move || {
-                let mut counter = counter.lock();
-                *counter += 1;
-
-                // If this is the last increment, signal that we're done.
-                if *counter == N {
-                    tx.send(()).unwrap();
-                }
-            });
-        }
-
-        // Wait until the last thread increments the counter.
-        rx.recv().unwrap();
-
-        // The counter must equal the number of threads.
-        assert_eq!(*counter.lock(), N);
+        assert_eq!(queue.lock().len(), count_actual);
 
         println!("Done!");
     }
